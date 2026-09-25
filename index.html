@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Fibonacci Clock</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -85,6 +90,8 @@
   button:focus-visible { outline: 2px solid var(--spiral); outline-offset: 2px; }
   @media (max-height: 560px) { .seq { display: none; } }
 </style>
+</head>
+<body>
 
 <canvas id="stage" aria-hidden="true"></canvas>
 <div class="hud">
@@ -328,3 +335,5 @@
   requestAnimationFrame(frame);
 })();
 </script>
+</body>
+</html>
