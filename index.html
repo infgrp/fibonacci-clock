@@ -1,0 +1,330 @@
+<title>Fibonacci Clock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #06070a;
+    --ink: #ece8df;
+    --muted: #7d828c;
+    --line: #34373e;
+    --spiral: #4ea9dc;
+    --accent: #ff7657;
+    --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hud {
+    position: relative;
+    box-sizing: border-box;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    text-align: center;
+    padding-inline: 16px;
+    padding-block: clamp(14px, 3.5vh, 40px) clamp(12px, 3vh, 28px);
+    pointer-events: none;
+  }
+  header, footer { display: flex; flex-direction: column; align-items: center; }
+  h1 {
+    margin: 0;
+    font-weight: 400;
+    font-size: clamp(32px, 6vw, 60px);
+    line-height: 1.05;
+    letter-spacing: .01em;
+    text-wrap: balance;
+  }
+  .time {
+    margin-top: .15em;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: clamp(26px, 4.6vw, 44px);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .time small {
+    margin-left: .4em;
+    font-size: .38em;
+    font-weight: 600;
+    letter-spacing: .14em;
+    color: var(--muted);
+    vertical-align: .6em;
+  }
+  .caption { margin: 0; color: var(--spiral); font-size: clamp(18px, 3.4vw, 30px); }
+  .seq {
+    display: flex;
+    gap: .75em;
+    margin: .25em 0 .6em;
+    font-size: clamp(18px, 3vw, 28px);
+    font-variant-numeric: tabular-nums;
+    color: #b4b7be;
+  }
+  .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; pointer-events: auto; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 5px 14px;
+    cursor: pointer;
+  }
+  button:hover { color: var(--ink); }
+  button[aria-pressed="true"] { color: var(--ink); border-color: var(--spiral); }
+  button:focus-visible { outline: 2px solid var(--spiral); outline-offset: 2px; }
+  @media (max-height: 560px) { .seq { display: none; } }
+</style>
+
+<canvas id="stage" aria-hidden="true"></canvas>
+<div class="hud">
+  <header id="top">
+    <h1>Fibonacci Clock</h1>
+    <div class="time" id="time" aria-live="off">--:--:--<small>--</small></div>
+  </header>
+  <footer id="bottom">
+    <p class="caption">Time, drawn by a Fibonacci spiral</p>
+    <div class="seq"><span>1</span><span>1</span><span>2</span><span>3</span><span>5</span><span>8</span><span>13</span></div>
+    <div class="controls">
+      <button id="sp-1" data-speed="1" aria-pressed="true">Live</button>
+      <button id="sp-60" data-speed="60" aria-pressed="false">×60</button>
+      <button id="sp-720" data-speed="720" aria-pressed="false">×720</button>
+      <button id="squares" aria-pressed="false">Squares</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  // Golden spiral r = e^(bθ): radius grows by φ every quarter turn.
+  // Each dial's spiral turns once per cycle (12 h, 60 min, 60 s). Its crossing
+  // with the vertical axis slides outward (×φ² per half turn), alternating
+  // between the upper axis (marks 1–6) and the lower axis (marks 7–12).
+  const PHI = (1 + Math.sqrt(5)) / 2;
+  const B = Math.log(PHI) / (Math.PI / 2);
+  const R1 = 205;                               // radius of mark 1 (and 7)
+  const CLOCK_R = 135;
+  const TH_MIN = Math.log(4) / B, TH_MAX = Math.log(620) / B;
+  const CELL_TOP = -560, CELL_BOTTOM = 610, CELL_HALF_W = 560;
+
+  const css = getComputedStyle(document.documentElement);
+  const C = {
+    ink: css.getPropertyValue('--ink').trim(),
+    muted: css.getPropertyValue('--muted').trim(),
+    line: css.getPropertyValue('--line').trim(),
+    spiral: css.getPropertyValue('--spiral').trim(),
+    accent: css.getPropertyValue('--accent').trim(),
+    num: '#b4b7be',
+  };
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // θ where the spiral meets the upper axis at dial value v (0–12)
+  const thetaTop = v => Math.log(R1) / B + Math.PI * (v - 1) / 6;
+  // rotation of the spiral at dial value v; a point sits at angle ω − θ
+  const omega = v => thetaTop(v) - Math.PI / 2;
+  const pt = (th, w) => {
+    const r = Math.exp(B * th), a = w - th;
+    return [r * Math.cos(a), r * Math.sin(a)];
+  };
+
+  // marks: the piece of the spiral that sits on each numeral when the dial reads it exactly
+  const marks = [];
+  for (let i = 1; i <= 12; i++) {
+    const top = i <= 6;
+    const thC = top ? thetaTop(i) : thetaTop(i) - Math.PI;
+    const r = Math.exp(B * thC);
+    marks.push({ i, w: omega(i), thC, r: top ? -r : r });
+  }
+
+  const dials = [
+    { name: 'HOURS', label: i => String(i), hand: { len: 92, width: 5, color: 'ink' } },
+    { name: 'MINUTES', label: i => String((i * 5) % 60).padStart(2, '0'), hand: { len: 115, width: 3.5, color: 'ink' } },
+    { name: 'SECONDS', label: i => String((i * 5) % 60).padStart(2, '0'), hand: { len: 122, width: 2, color: 'accent' } },
+  ];
+
+  // ---- DOM ----
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+  const timeEl = document.getElementById('time');
+  const topEl = document.getElementById('top');
+  const bottomEl = document.getElementById('bottom');
+  const sqBtn = document.getElementById('squares');
+
+  let showSquares = false;
+  try { showSquares = localStorage.getItem('fib-squares') === '1'; } catch (e) {}
+  sqBtn.setAttribute('aria-pressed', showSquares);
+  sqBtn.addEventListener('click', () => {
+    showSquares = !showSquares;
+    sqBtn.setAttribute('aria-pressed', showSquares);
+    try { localStorage.setItem('fib-squares', showSquares ? '1' : '0'); } catch (e) {}
+  });
+
+  // simulated time (for the speed buttons)
+  let speed = 1, baseReal = Date.now(), baseSim = Date.now();
+  document.querySelectorAll('[data-speed]').forEach(b => b.addEventListener('click', () => {
+    const now = Date.now();
+    baseSim = baseSim + (now - baseReal) * speed;
+    baseReal = now;
+    speed = +b.dataset.speed;
+    if (speed === 1) baseSim = now;
+    document.querySelectorAll('[data-speed]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  }));
+  const simNow = () => new Date(baseSim + (Date.now() - baseReal) * speed);
+
+  // three dials in a row when wide, in a column when tall
+  let W = 0, H = 0, dpr = 1, s = 1;
+  function layout() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const t = topEl.getBoundingClientRect().bottom + 6;
+    const b = bottomEl.getBoundingClientRect().top - 6;
+    const bw = W - 32, bh = Math.max(60, b - t);
+    const cw = 2 * CELL_HALF_W, ch = CELL_BOTTOM - CELL_TOP;
+    const sRow = Math.min(bw / (3 * cw), bh / ch);
+    const sCol = Math.min(bw / cw, bh / (3 * ch));
+    const row = sRow >= sCol;
+    s = row ? sRow : sCol;
+    dials.forEach((d, k) => {
+      if (row) {
+        d.cx = W / 2 + (k - 1) * bw / 3;
+        d.cy = t + (bh - ch * s) / 2 - CELL_TOP * s;
+      } else {
+        d.cx = W / 2;
+        d.cy = t + k * bh / 3 + (bh / 3 - ch * s) / 2 - CELL_TOP * s;
+      }
+    });
+  }
+  addEventListener('resize', layout);
+  if (document.fonts) document.fonts.ready.then(layout);
+
+  let ox = 0, oy = 0;
+  const X = x => ox + x * s, Y = y => oy + y * s;
+  const lw = w => Math.max(1, w * s);
+
+  function strokeSpiral(w, th0, th1) {
+    ctx.beginPath();
+    for (let th = th0, first = true; th < th1 + 0.02; th += 0.02, first = false) {
+      const [x, y] = pt(Math.min(th, th1), w);
+      first ? ctx.moveTo(X(x), Y(y)) : ctx.lineTo(X(x), Y(y));
+    }
+    ctx.stroke();
+  }
+
+  function drawDial(d, v) {
+    ox = d.cx; oy = d.cy;
+    const w = omega(v);
+    const active = Math.floor(v) || 12;
+    ctx.lineCap = 'round';
+
+    // golden squares turning with the spiral (optional)
+    if (showSquares) {
+      ctx.strokeStyle = C.spiral; ctx.globalAlpha = 0.22; ctx.lineWidth = lw(1.5);
+      const k0 = Math.ceil((Math.log(20) / B) / (Math.PI / 2));
+      for (let k = k0; (k + 1) * Math.PI / 2 <= TH_MAX; k++) {
+        const p = pt(k * Math.PI / 2, w), q = pt((k + 1) * Math.PI / 2, w);
+        const mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+        const dx = (q[0] - p[0]) / 2, dy = (q[1] - p[1]) / 2;
+        ctx.beginPath();
+        ctx.moveTo(X(p[0]), Y(p[1]));
+        ctx.lineTo(X(mx - dy), Y(my + dx));
+        ctx.lineTo(X(q[0]), Y(q[1]));
+        ctx.lineTo(X(mx + dy), Y(my - dx));
+        ctx.closePath(); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // marks + numerals
+    ctx.font = `700 ${Math.max(9, 28 * s)}px Newsreader, Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const m of marks) {
+      const on = m.i === active;
+      const text = d.label(m.i);
+      const gap = (text.length > 1 ? 30 : 20) / (Math.abs(m.r) * Math.hypot(1, B));
+      ctx.strokeStyle = on ? C.accent : C.line;
+      ctx.lineWidth = lw(on ? 4.5 : 3.2);
+      strokeSpiral(m.w, m.thC - 0.62, m.thC - gap);
+      strokeSpiral(m.w, m.thC + gap, m.thC + 0.5);
+      ctx.fillStyle = on ? C.accent : C.num;
+      ctx.fillText(text, X(0), Y(m.r));
+    }
+
+    // dial name
+    ctx.font = `600 ${Math.max(9, 26 * s)}px Newsreader, Georgia, serif`;
+    ctx.fillStyle = C.muted;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${Math.max(1, 4 * s)}px`;
+    ctx.fillText(d.name, X(0), Y(CELL_BOTTOM - 30));
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+
+    // clock face
+    ctx.strokeStyle = C.ink; ctx.lineWidth = lw(3.5);
+    ctx.beginPath(); ctx.arc(X(0), Y(0), CLOCK_R * s, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 60; i++) {
+      const ang = i / 60 * Math.PI * 2 - Math.PI / 2, major = i % 5 === 0;
+      const r1 = CLOCK_R - (major ? 17 : 8);
+      ctx.lineWidth = lw(major ? 3 : 1.5);
+      ctx.beginPath();
+      ctx.moveTo(X(Math.cos(ang) * r1), Y(Math.sin(ang) * r1));
+      ctx.lineTo(X(Math.cos(ang) * (CLOCK_R - 2)), Y(Math.sin(ang) * (CLOCK_R - 2)));
+      ctx.stroke();
+    }
+
+    // the turning spiral
+    ctx.strokeStyle = C.spiral; ctx.lineWidth = lw(5.5);
+    strokeSpiral(w, TH_MIN, TH_MAX);
+
+    // where the spiral meets the numeral axis: the pointer
+    {
+      const top = v >= 0.5 && v < 6.5;
+      const th = top ? thetaTop(v) : thetaTop(v < 0.5 ? v + 12 : v) - Math.PI;
+      const r = Math.exp(B * th) * (top ? -1 : 1);
+      const pulse = reduceMotion ? 1 : 0.75 + 0.25 * Math.sin(Date.now() / 300);
+      ctx.fillStyle = C.spiral; ctx.globalAlpha = 0.28 * pulse;
+      ctx.beginPath(); ctx.arc(X(0), Y(r), lw(17), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // hand
+    {
+      const ang = v / 12 * Math.PI * 2 - Math.PI / 2, hd = d.hand;
+      ctx.strokeStyle = C[hd.color]; ctx.lineWidth = lw(hd.width);
+      ctx.beginPath(); ctx.moveTo(X(0), Y(0));
+      ctx.lineTo(X(Math.cos(ang) * hd.len), Y(Math.sin(ang) * hd.len)); ctx.stroke();
+      ctx.fillStyle = C.accent;
+      ctx.beginPath(); ctx.arc(X(0), Y(0), lw(11), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function frame() {
+    const now = simNow();
+    const h = now.getHours(), m = now.getMinutes();
+    const sec = now.getSeconds() + (reduceMotion && speed === 1 ? 0 : now.getMilliseconds() / 1000);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawDial(dials[0], (h % 12) + m / 60 + sec / 3600);
+    drawDial(dials[1], (m + sec / 60) / 5);
+    drawDial(dials[2], sec / 5);
+
+    const pad = n => String(n).padStart(2, '0');
+    const txt = `${pad(h % 12 || 12)}:${pad(m)}:${pad(now.getSeconds())}<small>${h < 12 ? 'AM' : 'PM'}</small>`;
+    if (timeEl.innerHTML !== txt) timeEl.innerHTML = txt;
+
+    requestAnimationFrame(frame);
+  }
+
+  layout();
+  requestAnimationFrame(frame);
+})();
+</script>
